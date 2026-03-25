@@ -1,13 +1,11 @@
 import eyed3
-import urllib.request
 import configparser
 import os
 
+from eyed3.core import Date
 from urllib.parse import urlparse
 from pathlib import Path
-from eyed3.core import AudioFile, Tag
-from yandex_music import Artist, Client, Track, TracksList, Playlist, Album
-
+from yandex_music import Artist, Client, Track, Playlist, Album
 
 
 def compile_artists(artists: list[Artist]) -> str:
@@ -17,6 +15,7 @@ def compile_artists(artists: list[Artist]) -> str:
     for artist in artists:
         overall += f'{artist.name}, '
     return overall[:-2]
+
 
 
 def setup_track_metadata(track: Track, mp3_path: str, cover_path: str, remove_cover = True):
@@ -32,6 +31,9 @@ def setup_track_metadata(track: Track, mp3_path: str, cover_path: str, remove_co
     audiofile.tag.album = track.albums[0].title
     audiofile.tag.album_artist = compile_artists(track.albums[0].artists)
     audiofile.tag.title = track.title
+    audiofile.tag.genre = track.albums[0].genre
+    audiofile.tag.recording_date = Date(track.albums[0].year)
+    audiofile.tag.track_num = track.albums[0].track_position.index
 
     with open(cover_path, "rb") as image_file:
         imagedata = image_file.read()
@@ -47,7 +49,7 @@ def download_lyrics(track: Track, path = './'):
         with open( f'{path}{compile_artists(track.artists)} - {track.title}.lrc', 'w') as file:
             file.write(track.get_lyrics('LRC').fetch_lyrics())
 
-def download_track(track : Track, path = './', album_cover = None):
+def download_track(track : Track, path = './', lyrics = True, album_cover = None):
     """Скачать трек (mp3), обложку (png, удалится после вызова) и текст (lrc), записать метаданные
     """
     if path[-1] != '/':
@@ -61,14 +63,15 @@ def download_track(track : Track, path = './', album_cover = None):
     print(f'{artists} - {track.title}.mp3 ✅')
 
     if album_cover is None:
-        track.download_cover(cover_path)
+        track.download_cover(cover_path, '400x400')
     else:
         cover_path = album_cover
 
     print(f'    обложка ✅')
     setup_track_metadata(track, mp3_path, cover_path, album_cover is None)
     print(f'    метаданные ✅')
-    # download_lyrics(track, path)
+    if lyrics:
+        download_lyrics(track, path)
 
 
 def download_playlist(playlist: Playlist, path = './'):
@@ -83,7 +86,7 @@ def download_playlist(playlist: Playlist, path = './'):
 
     for track in playlist.fetch_tracks():
         print(f'  {track.track.artists[0].name} - {track.track.title}')
-        download_track(track.track, path)
+        download_track(track=track.track, path=path)
 
 
 def download_album(album: Album, path = './'):
@@ -105,13 +108,13 @@ def download_album(album: Album, path = './'):
         os.mkdir(path)
 
     cover_path = f'{path}/{album.title}.png'
-    album.download_cover(cover_path)
+    album.download_cover(cover_path, '400x400')
     for track in tracks:
-        download_track(track, path, cover_path)
+        download_track(track=track, path=path, cover_path=cover_path)
     os.remove(cover_path)
 
 
-def download_by_url(url_string: str, path = './'):
+def download_by_url(client, url_string: str, path = './'):
     """Скачать трек или альбом в зависимости от типа ссылки.
     """
     parsed_url = urlparse(url_string)
@@ -130,9 +133,20 @@ def download_by_url(url_string: str, path = './'):
         if album_id is not None:
             download_album(client.albums_with_tracks(album_id), path)
     else:
-        download_track(client.tracks(track_id)[0], path)
+        download_track(track=client.tracks(track_id)[0], path=path)
+
+import datetime
+
+def print_info(track: Track):
+    print(f'{compile_artists(track.artists)} - {track.title}, {track.albums[0].year}')
+    duration = datetime.datetime.fromtimestamp(track.duration_ms/1000.0)
+    print(f'  duration {str(duration.minute).zfill(2)}:{str(duration.second).zfill(2)} ')
 
 if __name__ == '__main__':
     config = configparser.ConfigParser()
     config.read('data.ini')
     client = Client(config['yandex']['access_token']).init()
+    # download_track(client.users_likes_tracks().fetch_tracks()[4], '/mnt/c/Users/atochilin/Desktop/msc')    
+    print_info(client.users_likes_tracks().fetch_tracks()[2])
+    # with open("track.json", "w") as file:
+        # file.write(str(client.users_likes_tracks().fetch_tracks()[2]))
