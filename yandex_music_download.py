@@ -1,14 +1,62 @@
 import configparser
 import datetime
+import os
+
 from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Button, Label, Checkbox
 from textual.containers import HorizontalGroup, VerticalScroll, Grid
 from textual_fspicker import SelectDirectory
 from textual.screen import ModalScreen
-from yandex_music import Client, Track
+from pathlib import Path
+from pygame import mixer
 
+from yandex_music import Client, Track
 from yandex_music_get import compile_artists, download_track
+
+
+class Player:
+    def __init__(self):
+        mixer.init()
+        self.path = None
+        self.max_tracks = 5
+        self.i = 0
+        self.tracklist = []
+        temp_path = Path('./temp')
+        for item in temp_path.iterdir():
+            self.tracklist.append(f'./temp/{item.name}')
+            self.i += 1
+
+    def is_cached(self, mp3_path):
+        return mp3_path in self.tracklist
+    
+    def play(self, mp3_path):
+        if self.path == mp3_path:
+            mixer.music.stop()
+            self.path = None
+        else:
+            if mp3_path not in self.tracklist:
+                if len(self.tracklist) >= self.max_tracks:
+                    if self.i >= self.max_tracks:
+                        self.i = 0
+                    os.remove(self.tracklist[self.i])
+                    self.tracklist[self.i] = mp3_path
+                    self.i += 1
+                else:
+                    self.tracklist.append(mp3_path)
+                    self.i += 1
+
+            self.path = mp3_path
+            mixer.music.load(self.path)
+            mixer.music.play()
+
+    def stop(self):
+        mixer.music.stop()
+
+    def is_playing(self, mp3_path):
+        return mixer.music.get_busy() and self.path == mp3_path
+
+
 
 class MessageBox(ModalScreen):
     def __init__(self, message: str, title: str = "Сообщение"):
@@ -39,33 +87,6 @@ class Track_view:
 
 
 
-class Track_row(HorizontalGroup):
-    def __init__(self, track: Track, path: str, **kwargs):
-            super().__init__(**kwargs)
-            self.view = Track_view(compile_artists(track.artists), track.title, track.duration_ms)
-            self.track = track
-            self.path = path
-            
-    def compose(self) -> ComposeResult:
-        yield Label(self.view.name(), id='track_name')
-        yield Label(self.view.duration(), id='track_length')
-        yield Button(label='D', id='download_button', variant='success', flat=True)
-
-    @on(Button.Pressed, '#download_button')
-    def show_dialog(self, event: Button.Pressed):
-        self.message_box = MessageBox(f'downloaded at {self.path}/{self.view.name()}.mp3', self.view.name())
-        self.app.push_screen(self.message_box)
-        download_track(track=self.track, path=self.path)
-        self.set_timer(1, lambda: self.app.pop_screen())
-        # self.message_box.dismiss()
-
-    def close_message_box(self):
-        """Закрыть окно сообщения извне"""
-        if self.message_box and self.message_box.is_attached:
-            self.message_box.dismiss()
-
-
-
 class Download_folder(HorizontalGroup):
     def __init__(self, path: str, **kwargs):
         super().__init__(**kwargs)
@@ -93,6 +114,49 @@ class Download_folder(HorizontalGroup):
         if selected_path:
             self.path = str(selected_path)
             self.path_label.update(self.path)
+
+
+
+class Track_row(HorizontalGroup):
+    def __init__(self, track: Track, player: Player, download_folder: Download_folder, **kwargs):
+            super().__init__(**kwargs)
+            self.view = Track_view(compile_artists(track.artists), track.title, track.duration_ms)
+            self.track = track
+            self.download_folder = download_folder
+            self.player = player
+
+    def compose(self) -> ComposeResult:
+
+        icon = '⏸'
+        if self.player.is_playing(self.temp_path()): 
+            icon = '▶'
+        self.play_button = Button(label=icon, id='play_button', variant='primary', flat=True)
+        self.download_button = Button(label='⬇', id='download_button', variant='success', flat=True)
+        yield Label(self.view.name(), id='track_name')
+        yield Label(self.view.duration(), id='track_length')
+        yield self.play_button
+        yield self.download_button
+
+    def temp_path(self) -> str:
+        return f'./temp/{compile_artists(self.track.artists)} - {self.track.title}.mp3'
+
+    @on(Button.Pressed)
+    def show_dialog(self, event: Button.Pressed):
+        if event.button == self.download_button:
+            self.message_box = MessageBox(f'downloaded at {self.download_folder.path}{self.view.name()}.mp3', self.view.name())
+            self.app.push_screen(self.message_box)
+            download_track(track=self.track, path=self.download_folder.path)
+            self.set_timer(1, lambda: self.app.pop_screen())
+        else:
+            path = self.temp_path()
+            if not self.player.is_cached(path):
+                self.track.download(path)
+            self.player.play(path)
+
+    def close_message_box(self):
+        """Закрыть окно сообщения извне"""
+        if self.message_box and self.message_box.is_attached:
+            self.message_box.dismiss()
 
 
 
@@ -134,24 +198,25 @@ class Navigation(HorizontalGroup):
             if self.index == self.max_index - 1:
                 self.next_button.disabled = False
         self.set_page_lambda(self.index)
-        
 
 
 
 class Tracklist_app(App):
-    def __init__(self, path: str, client: Client, **kwargs):
+    def __init__(self, path: str, tracks: list[Track], player: Player, **kwargs):
         super().__init__(**kwargs)
         self.path = path
-        self.tracks = client.users_likes_tracks().fetch_tracks()
+        self.tracks = tracks
+        self.player = player
 
     def tracklist(self, page: int) -> list:
         tracks = []
         for i in range(page * 10, (page * 10) + 10):
-            tracks.append(Track_row(self.tracks[i], self.path))
+            tracks.append(Track_row(self.tracks[i], self.player, self.download_folder))
         return tracks
 
     def compose(self) -> ComposeResult:
-        self.scroll = VerticalScroll(Download_folder(self.path), *self.tracklist(0), Navigation(self.tracks, lambda page: self.set_page(page)))
+        self.download_folder = Download_folder(self.path)
+        self.scroll = VerticalScroll(self.download_folder, *self.tracklist(0), Navigation(self.tracks, lambda page: self.set_page(page)))
         yield Header()
         yield Footer()
         yield self.scroll
@@ -191,6 +256,33 @@ if __name__ == '__main__':
     config.read('data.ini')
     client = Client(config['yandex']['access_token']).init()
     # download_track(client.users_likes_tracks().fetch_tracks()[4], '/mnt/c/Users/atochilin/Desktop/msc')    
-    
-    app = Tracklist_app('/mnt/c/Users/atochilin/Desktop/msc', client)
+
+    temp_path = Path('./temp')
+    if not temp_path.exists():
+        os.mkdir(temp_path)
+
+    player = Player()
+
+    # tracks = []
+    # playlist = client.users_playlists_list()[0]
+    # playlist_tracks = playlist.fetch_tracks()
+    # for i, track in enumerate(playlist_tracks, 1):
+    #     tracks.append(track.track)
+
+
+    # with open("like.json", "w") as file:
+        # file.write(str(client.users_likes_playlists()[0]))
+
+    # for like in client.users_likes_playlists():
+    #     if like.type == 'playlist':
+    #         print(f'Owner: {like.playlist.owner.name}')
+    #         print(f'Title: {like.playlist.title}')
+    #         if like.playlist.owner.name == 'potom':
+    #             print('    FOUND')
+    #             for i, track in enumerate(like.playlist.fetch_tracks(), 1):
+    #                 tracks.append(track.track)
+
+
+    # app = Tracklist_app('/home/greggot/Музыка/', tracks, player)
+    app = Tracklist_app('/home/greggot/Музыка/', client.users_likes_tracks().fetch_tracks(), player)
     app.run()

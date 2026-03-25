@@ -72,3 +72,15 @@ MessageBox {
     content-align: center middle;
     padding-top: 1;
 }
+
+#play_button {
+    text-style: bold;
+    margin-right: 1;
+    margin-left: 1;
+}
+
+#download_button {
+    text-style: bold;
+    margin-right: 1;
+    margin-left: 1;
+}
