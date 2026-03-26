@@ -1,10 +1,11 @@
 import configparser
 import datetime
 import os
+from typing import Callable, final, override
 
 from textual import on
 from textual.app import App, ComposeResult
-from textual.widgets import Footer, Header, Button, Label, Checkbox
+from textual.widgets import Footer, Header, Button, Label
 from textual.containers import HorizontalGroup, VerticalScroll, Grid
 from textual_fspicker import SelectDirectory
 from textual.screen import ModalScreen
@@ -15,22 +16,23 @@ from yandex_music import Client, Track
 from yandex_music_get import compile_artists, download_track
 
 
+@final
 class Player:
     def __init__(self):
         mixer.init()
         self.path = None
         self.max_tracks = 5
         self.i = 0
-        self.tracklist = []
+        self.tracklist: list[str] = []
         temp_path = Path('./temp')
         for item in temp_path.iterdir():
             self.tracklist.append(f'./temp/{item.name}')
             self.i += 1
 
-    def is_cached(self, mp3_path):
+    def is_cached(self, mp3_path: str):
         return mp3_path in self.tracklist
     
-    def play(self, mp3_path):
+    def play(self, mp3_path: str):
         if self.path == mp3_path:
             mixer.music.stop()
             self.path = None
@@ -53,24 +55,27 @@ class Player:
     def stop(self):
         mixer.music.stop()
 
-    def is_playing(self, mp3_path):
+    def is_playing(self, mp3_path: str):
         return mixer.music.get_busy() and self.path == mp3_path
 
 
 
-class MessageBox(ModalScreen):
-    def __init__(self, message: str, title: str = "Сообщение"):
+@final
+class MessageBox(ModalScreen[None]):
+    def __init__(self, message: str, header: str = "Сообщение"):
         super().__init__()
         self.message = message
-        self.title = title
+        self.header = header
 
+    @override
     def compose(self):
         yield Grid(
-            Label(self.title, id="title"),
+            Label(self.header, id="title"),
             Label(self.message, id="message"),
             id="dialog"
         )
 
+@final
 class Track_view:
     def __init__(self, artist: str, track: str, duration_ms: int):
         self.artist = artist
@@ -86,12 +91,14 @@ class Track_view:
         return f'{self.artist} - {self.track}'
 
 
-
+@final
 class Download_folder(HorizontalGroup):
     def __init__(self, path: str, **kwargs):
         super().__init__(**kwargs)
         self.path = path
+        self.path_label: Label
 
+    @override
     def compose(self) -> ComposeResult:
         yield Label('Download folder:', id='download_folder_label')
         self.path_label = Label(self.path, id='download_path')
@@ -99,7 +106,7 @@ class Download_folder(HorizontalGroup):
         yield Button(label='📁...', flat=True)
 
     @on(Button.Pressed)
-    def on_button_pressed(self, event: Button.Pressed):
+    def on_button_pressed(self, _: Button.Pressed):
         """Открыть диалог выбора папки"""
         self.app.push_screen(
             SelectDirectory(
@@ -109,24 +116,27 @@ class Download_folder(HorizontalGroup):
             callback=self.update_folder
         )
 
-    def update_folder(self, selected_path):
+    def update_folder(self, selected_path: Path | None):
         """Обновить путь после выбора"""
         if selected_path:
             self.path = str(selected_path)
             self.path_label.update(self.path)
 
 
-
+@final
 class Track_row(HorizontalGroup):
     def __init__(self, track: Track, player: Player, download_folder: Download_folder, **kwargs):
             super().__init__(**kwargs)
-            self.view = Track_view(compile_artists(track.artists), track.title, track.duration_ms)
+            self.view = Track_view(compile_artists(track.artists), track.title or 'Unknown', track.duration_ms or 0)
             self.track = track
             self.download_folder = download_folder
             self.player = player
+            self.play_button: Button
+            self.download_button: Button
+            self.message_box: MessageBox
 
+    @override
     def compose(self) -> ComposeResult:
-
         icon = '⏸'
         if self.player.is_playing(self.temp_path()): 
             icon = '▶'
@@ -159,18 +169,22 @@ class Track_row(HorizontalGroup):
             self.message_box.dismiss()
 
 
-
+@final
 class Navigation(HorizontalGroup):  
-    def __init__(self, track_list: list[Track], set_page_lambda,  **kwargs):
+    def __init__(self, track_list: list[Track], set_page_lambda: Callable[[int], None],  **kwargs):
         super().__init__(**kwargs)
         self.tracks_size = len(track_list)
         self.max_index = self.tracks_size // 10  + 1
         self.index = 0
         self.set_page_lambda = set_page_lambda
+        self.index_label: Label
+        self.prev_button: Button
+        self.next_button: Button
 
     def index_string(self) -> str:
         return f'{self.index} / {self.max_index}'
 
+    @override
     def compose(self) -> ComposeResult:
         self.index_label = Label(self.index_string(), id='navigation_index')
         self.prev_button = Button(label='⬅', flat=True, disabled=True, id='navigation_prev_button')
@@ -201,19 +215,23 @@ class Navigation(HorizontalGroup):
 
 
 
-class Tracklist_app(App):
+@final
+class Tracklist_app(App[None]):
     def __init__(self, path: str, tracks: list[Track], player: Player, **kwargs):
         super().__init__(**kwargs)
         self.path = path
         self.tracks = tracks
         self.player = player
+        self.scroll: VerticalScroll
+        self.download_folder: Download_folder
 
-    def tracklist(self, page: int) -> list:
-        tracks = []
+    def tracklist(self, page: int) -> list[Track_row]:
+        tracks: list[Track_row] = []
         for i in range(page * 10, (page * 10) + 10):
             tracks.append(Track_row(self.tracks[i], self.player, self.download_folder))
         return tracks
 
+    @override
     def compose(self) -> ComposeResult:
         self.download_folder = Download_folder(self.path)
         self.scroll = VerticalScroll(self.download_folder, *self.tracklist(0), Navigation(self.tracks, lambda page: self.set_page(page)))
@@ -236,11 +254,11 @@ class Tracklist_app(App):
 
     CSS_PATH = "ymd.tcss"
     BINDINGS = [
-            ("q", "quit", "Quit"),
+            ("q", "onquit", "Quit"),
             ("t", "toggle_dark", "Toggle dark mode"),
         ]
     
-    def action_quit(self) -> None:
+    def action_onquit(self) -> None:
         self.exit()
 
     def action_toggle_dard(self) -> None:
@@ -261,7 +279,6 @@ if __name__ == '__main__':
     if not temp_path.exists():
         os.mkdir(temp_path)
 
-    player = Player()
 
     # tracks = []
     # playlist = client.users_playlists_list()[0]
@@ -284,5 +301,7 @@ if __name__ == '__main__':
 
 
     # app = Tracklist_app('/home/greggot/Музыка/', tracks, player)
-    app = Tracklist_app('/home/greggot/Музыка/', client.users_likes_tracks().fetch_tracks(), player)
-    app.run()
+    track_list = client.users_likes_tracks()
+    if track_list:
+        app = Tracklist_app('/home/greggot/Музыка/', track_list.fetch_tracks(), Player())
+        app.run()
