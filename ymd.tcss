@@ -1,5 +1,5 @@
 Download_folder {
-    background: $boost;
+    background: #3ca9b5;
     height: 3;
     margin: 1;
     min-width: 50;
@@ -9,13 +9,20 @@ Download_folder {
 #download_folder_label {
     margin: 1;
 }
-
 #download_path {
     width: 1fr;
     margin: 1;
     align: center middle;
 }
 
+#clipboard_name {
+    width: 1fr;
+    margin: 1;
+    align: center middle;
+}
+#clipboard_yes {
+    margin-right: 2;
+}
 
 Track {
     background: $boost;
@@ -49,10 +56,27 @@ MessageBox {
 #dialog {
     grid-size: 1 3;
     width: 40;
-    height: 10;
+    height: 12;
     border: thick $primary;
     background: $surface;
     padding: 1;
+}
+
+YesNoBox {
+    align: center middle;
+    background: $surface 80%;
+}
+
+#yes_no_button_div {
+    width: 1fr;
+}
+
+#modal_yes {
+    margin-right: 2;
+}
+
+#download_clipboard {
+    margin-right: 2;
 }
 
 #title {

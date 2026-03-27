@@ -2,18 +2,21 @@ import configparser
 import datetime
 import os
 from typing import Callable, final, override
+from urllib.parse import urlparse
 
+import pyperclip
 from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Button, Label
-from textual.containers import HorizontalGroup, VerticalScroll, Grid
+from textual.containers import HorizontalGroup, HorizontalScroll, VerticalScroll, Grid
 from textual_fspicker import SelectDirectory
 from textual.screen import ModalScreen
+from textual.events import AppFocus
 from pathlib import Path
 from pygame import mixer
 
-from yandex_music import Client, Track
-from yandex_music_get import compile_artists, download_track
+from yandex_music import Album, Client, Track
+from yandex_music_get import compile_artists, download_album, download_track
 
 
 @final
@@ -76,6 +79,35 @@ class MessageBox(ModalScreen[None]):
         )
 
 @final
+class YesNoBox(ModalScreen[bool]):
+    def __init__(self, header: str = 'Да-Нет', message: str = "Сообщение"):
+        super().__init__()
+        self.header = header
+        self.message = message
+        self.yes_button = Button(label='yes', id='modal_yes', variant='success', flat=True)
+        self.no_button = Button(label='no', id='modal_no', variant='error', flat=True)
+
+    @override
+    def compose(self):
+        yield VerticalScroll(
+            Label(self.header, id="title"),
+            Label(self.message, id="message"),
+            HorizontalScroll(
+                self.yes_button,
+                self.no_button,
+                id='yes_no_button_div'
+            ),
+            id="dialog"
+        )
+
+    @on(Button.Pressed)
+    def select_option(self, event: Button.Pressed) -> None:
+        if event.button == self.yes_button:
+            self.dismiss(True)
+        else:
+            self.dismiss(False)
+
+@final
 class Track_view:
     def __init__(self, artist: str, track: str, duration_ms: int):
         self.artist = artist
@@ -103,7 +135,7 @@ class Download_folder(HorizontalGroup):
         yield Label('Download folder:', id='download_folder_label')
         self.path_label = Label(self.path, id='download_path')
         yield self.path_label
-        yield Button(label='📁...', flat=True)
+        yield Button(label='📁...', flat=True, id='download_picker')
 
     @on(Button.Pressed)
     def on_button_pressed(self, _: Button.Pressed):
@@ -123,6 +155,22 @@ class Download_folder(HorizontalGroup):
             self.path_label.update(self.path)
 
 
+
+@final
+class Clipboard_download(HorizontalGroup):
+    def __init__(self, track_name: str, **kwargs):
+        super().__init__(**kwargs)
+        self.track_name = track_name 
+        self.path_label: Label
+
+    @override
+    def compose(self) -> ComposeResult:
+        yield Label(f'Download: {self.track_name}? ', id='clipboard_name')
+        yield Button(label='✅', flat=True, id='clipboard_yes')
+        yield Button(label='❌', flat=True, id='clipboard_no')
+
+
+
 @final
 class Track_row(HorizontalGroup):
     def __init__(self, track: Track, player: Player, download_folder: Download_folder, **kwargs):
@@ -133,7 +181,6 @@ class Track_row(HorizontalGroup):
             self.player = player
             self.play_button: Button
             self.download_button: Button
-            self.message_box: MessageBox
 
     @override
     def compose(self) -> ComposeResult:
@@ -153,8 +200,8 @@ class Track_row(HorizontalGroup):
     @on(Button.Pressed)
     def show_dialog(self, event: Button.Pressed):
         if event.button == self.download_button:
-            self.message_box = MessageBox(f'downloaded at {self.download_folder.path}{self.view.name()}.mp3', self.view.name())
-            self.app.push_screen(self.message_box)
+            message_box = MessageBox(f'downloaded at {self.download_folder.path}{self.view.name()}.mp3', self.view.name())
+            self.app.push_screen(message_box)
             download_track(track=self.track, path=self.download_folder.path)
             self.set_timer(1, lambda: self.app.pop_screen())
         else:
@@ -163,10 +210,6 @@ class Track_row(HorizontalGroup):
                 self.track.download(path)
             self.player.play(path)
 
-    def close_message_box(self):
-        """Закрыть окно сообщения извне"""
-        if self.message_box and self.message_box.is_attached:
-            self.message_box.dismiss()
 
 
 @final
@@ -216,15 +259,71 @@ class Navigation(HorizontalGroup):
 
 
 @final
+class Clipboard_download:
+    def __init__(self, client: Client, download_folder: Download_folder, app: App[None]):
+        self.app = app
+        self.clipboard_track: Track | None = None
+        self.clipboard_album: Album | None = None
+        self.client = client
+        self.download_folder = download_folder
+
+    
+    def download_track_from_clipboard(self, track_id: str):
+        def download_from_clipboard(is_download: bool | None) -> None:
+            if is_download and self.clipboard_track:
+                download_track(track=self.clipboard_track, path=self.download_folder.path)
+
+        tracks = self.client.tracks(track_id)
+        if tracks and (self.clipboard_track is None or self.clipboard_track.id != track_id):
+            self.clipboard_track = tracks[0]
+            self.app.push_screen(YesNoBox('Ссылка из буфера обмена', 
+                f'Скачать трек \"{compile_artists(self.clipboard_track.artists)} - {self.clipboard_track.title}\"'), download_from_clipboard)
+
+    def download_album_from_clipboard(self, album_id: str):
+        def download_from_clipboard(is_download: bool | None) -> None:
+            if is_download and self.clipboard_album:
+                download_album(album=self.clipboard_album, path=self.download_folder.path)
+
+        if self.clipboard_album is None or str(self.clipboard_album.id) != album_id:
+            self.clipboard_album = client.albums_with_tracks(album_id)
+            if self.clipboard_album:
+                self.app.push_screen(YesNoBox('Ссылка из буфера обмена', 
+                    f'Скачать альбом \"{self.clipboard_album.title} ?'), download_from_clipboard)
+
+    def on_focus(self):
+        parsed_url = urlparse(pyperclip.paste())
+        if parsed_url.hostname is None:
+            return
+        if parsed_url.hostname != 'music.yandex.ru':
+            return
+        parameters = parsed_url.path.split('/')
+        track_id: str | None = None
+        album_id: str | None = None
+        for i in range(len(parameters)):
+            if parameters[i] == 'album':
+                album_id = parameters[i + 1]
+            if parameters[i] == 'track':
+                track_id = parameters[i + 1]
+                break
+
+        if track_id is not None:
+            self.download_track_from_clipboard(track_id)
+
+        elif album_id is not None:
+            self.download_album_from_clipboard(album_id)
+                
+
+@final
 class Tracklist_app(App[None]):
-    def __init__(self, path: str, tracks: list[Track], player: Player, **kwargs):
+    def __init__(self, path: str, client: Client, tracks: list[Track], player: Player, **kwargs):
         super().__init__(**kwargs)
         self.path = path
+        self.client = client
         self.tracks = tracks
         self.player = player
         self.scroll: VerticalScroll
-        self.download_folder: Download_folder
-
+        self.download_folder = Download_folder(self.path)
+        self.clipboard_download = Clipboard_download(client, self.download_folder, self)
     def tracklist(self, page: int) -> list[Track_row]:
         tracks: list[Track_row] = []
         for i in range(page * 10, (page * 10) + 10):
@@ -233,11 +332,17 @@ class Tracklist_app(App[None]):
 
     @override
     def compose(self) -> ComposeResult:
-        self.download_folder = Download_folder(self.path)
-        self.scroll = VerticalScroll(self.download_folder, *self.tracklist(0), Navigation(self.tracks, lambda page: self.set_page(page)))
+        self.scroll = VerticalScroll(
+            self.download_folder, 
+            *self.tracklist(0), 
+            Navigation(self.tracks, lambda page: self.set_page(page)))
         yield Header()
         yield Footer()
         yield self.scroll
+    @on(AppFocus)
+    def on_app_focus(self, _: AppFocus) -> None:
+        self.clipboard_download.on_focus()
+
 
     def set_page(self, page: int):
         """Обновить отображение при смене страницы"""
@@ -265,6 +370,16 @@ class Tracklist_app(App[None]):
         self.theme = (
             "textual-dark" if self.theme == "textual-light" else "textual-light"
         )
+
+
+
+def music_folder() -> str:
+    home_folder = os.environ['HOME']
+    for music_folder in ['Музыка', 'Music']:
+        path = Path(f'{home_folder}/{music_folder}')
+        if path.exists():
+            return str(path)
+    return home_folder
 
 
 
@@ -303,5 +418,5 @@ if __name__ == '__main__':
     # app = Tracklist_app('/home/greggot/Музыка/', tracks, player)
     track_list = client.users_likes_tracks()
     if track_list:
-        app = Tracklist_app('/home/greggot/Музыка/', track_list.fetch_tracks(), Player())
+        app = Tracklist_app(music_folder(), client, track_list.fetch_tracks(), Player())
         app.run()
