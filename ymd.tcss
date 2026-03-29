@@ -6,6 +6,14 @@ Download_folder {
     align: center middle;
 }
 
+Track {
+    background: $boost;
+    height: 5;
+    margin: 1;
+    min-width: 50;
+    align: center middle;
+}
+
 #download_folder_label {
     margin: 1;
 }
@@ -22,14 +30,6 @@ Download_folder {
 }
 #clipboard_yes {
     margin-right: 2;
-}
-
-Track {
-    background: $boost;
-    height: 5;
-    margin: 1;
-    min-width: 50;
-    align: center middle;
 }
 
 #track_name {
@@ -53,6 +53,25 @@ MessageBox {
     background: $surface 80%;
 }
 
+YesNoBox {
+    align: center middle;
+    background: $surface 80%;
+}
+
+Pick_user_page {
+    align: center middle;
+    background: $surface 80%;
+}
+
+Auth_page {
+    align: center middle;
+    background: $surface 80%;
+}
+
+.instruction {
+    width: 1fr;
+}
+
 #dialog {
     grid-size: 1 3;
     width: 40;
@@ -60,11 +79,6 @@ MessageBox {
     border: thick $primary;
     background: $surface;
     padding: 1;
-}
-
-YesNoBox {
-    align: center middle;
-    background: $surface 80%;
 }
 
 #yes_no_button_div {

@@ -1,5 +1,10 @@
 *.ini
 *.json
+*.yaml
 __pycache__
+
+.vscode
+.cache
+build
 temp
 config
